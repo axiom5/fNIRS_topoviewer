@@ -148,6 +148,11 @@ While this tool is designed to be flexible, users should be aware of the followi
 
 In summary, the tool generalizes well to different fNIRS montages provided accurate 3D coordinates, but requires strict adherence to file/data formatting and makes simplifying assumptions about head geometry for 3D interpolation.
 
+## Data Source
+
+Sample txt files used in this repo were extracted for a research study, the raw data of which is publicly available and can be found the following reference:
+
+Kamat, Anil; Eastmond, Condell; Gao, Yuanyuan; Nemani, Arun; Yanik, Erim; Cavuoto, Lora; et al. (2023). Assessment of Surgical TAsks Using Neuroimaging Dataset (ASTaUND). figshare. Collection. https://doi.org/10.6084/m9.figshare.c.6429713.v1
 
 ## Citation
 
@@ -155,9 +160,6 @@ If you use this visualization tool in your research or publications, please cite
 
 CeMSIM (2025). Interactive fNIRS Topography Viewer (Version [v1.1.1]). GitHub Repository. [Link](https://github.com/axiom5/fNIRS_topoviewer/)
 
-Sample txt files used in this repo were extracted for a research study, the raw data for which is publicly available and can be found the following reference:
-
-Kamat, Anil; Eastmond, Condell; Gao, Yuanyuan; Nemani, Arun; Yanik, Erim; Cavuoto, Lora; et al. (2023). Assessment of Surgical TAsks Using Neuroimaging Dataset (ASTaUND). figshare. Collection. https://doi.org/10.6084/m9.figshare.c.6429713.v1
 
 ## License
 
