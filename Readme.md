@@ -3,7 +3,6 @@
 This tool processes trial-based fNIRS data for multiple subjects, performs optional Hemodynamic Trigger Averaging (HTA), and generates interactive, self-contained HTML visualizations using D3.js. The visualizations feature a topographic heatmap interpolated in 3D space and projected onto a 2D view, along with clickable channels to display individual time series.
 
 ![Sample Screenshot Placeholder](placeholder.png) 
-*(Suggestion: Replace placeholder.png with an actual screenshot of your visualization)*
 
 ## Features
 
@@ -108,8 +107,8 @@ Key parameters need to be set in the main execution block (`if __name__ == "__ma
 
 1.  **Clone Repository:** Get the code and template file.
     ```bash
-    git clone <your-repo-url>
-    cd <your-repo-directory>
+    git clone <https://github.com/axiom5/fNIRS_topoviewer>
+    cd <fNIRS_topoviewer>
     ```
 2.  **Install Dependencies:**
     ```bash
