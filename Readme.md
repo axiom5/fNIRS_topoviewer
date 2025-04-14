@@ -87,7 +87,7 @@ The script expects specific file formats and naming conventions:
 
 ## Configuration
 
-Key parameters need to be set in the main execution block (`if __name__ == "__main__":`) of the Python script (`your_script_name.py`):
+Key parameters need to be set in the main execution block (`if __name__ == "__main__":`) of the Python script (`compiler_for_viz.py`):
 
 *   `folder`: Name used in the output directory name.
 *   `data_directory`: Path to the folder containing your `.txt` signal files.
@@ -107,20 +107,20 @@ Key parameters need to be set in the main execution block (`if __name__ == "__ma
 
 1.  **Clone Repository:** Get the code and template file.
     ```bash
-    git clone <https://github.com/axiom5/fNIRS_topoviewer>
-    cd <fNIRS_topoviewer>
+    git clone https://github.com/axiom5/fNIRS_topoviewer
+    cd fNIRS_topoviewer
     ```
 2.  **Install Dependencies:**
     ```bash
     pip install pandas numpy openpyxl
     ```
 3.  **Prepare Data:** Ensure your `.txt`, `digpts.txt`, and (if using) `.xlsx` files are formatted correctly and placed appropriately.
-4.  **Configure Script:** Edit the configuration variables in the main Python script (`your_script_name.py`) to match your file paths, data parameters, and desired processing options (HTA, downsampling, etc.).
+4.  **Configure Script:** Edit the configuration variables in the main Python script (`compiler_for_viz.py`) to match your file paths, data parameters, and desired processing options (HTA, downsampling, etc.).
 5.  **Run Script:**
     ```bash
-    python your_script_name.py
+    python compiler_for_viz.py
     ```
-6.  **View Output:** Open the generated `.html` files (located in the `output_visualization_dir`) in your web browser.
+6.  **View Output:** Open the generated `.html` files (located in the `visualizations`) in your web browser.
 
 ## Output
 
