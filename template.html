@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>fNIRS Topography: Trial TBC</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <style>
+        /* --- Previous styles --- */
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        .container { max-width: 800px; margin: 0 auto; background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1, h2 { text-align: center; color: #333; margin-bottom: 5px; }
+        h2 { color: #555; font-size: 1.2em; margin-bottom: 10px; }
+        .controls { margin: 15px 0; padding: 15px; background-color: #f9f9f9; border-radius: 5px; }
+        .control-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+        .slider { flex-grow: 1; height: 5px; min-width: 150px; }
+        .value-display { width: 70px; text-align: right; font-weight: bold; }
+        label { min-width: 70px; }
+        select { padding: 5px; border-radius: 3px; border: 1px solid #ccc; }
+        .topomap-container { position: relative; width: 600px; height: 500px; margin: 20px auto; border: 1px solid #ccc; }
+        .head-outline { fill: none; stroke: #333; stroke-width: 2px; }
+        .ear { fill: #f9f9f9; stroke: #333; stroke-width: 1.5px; }
+        .nose-outline { fill: #f9f9f9; stroke: #333; stroke-width: 1.5px; }
+        .optode { fill: black; stroke: white; stroke-width: 0.5px; pointer-events: none; } /* Optodes not clickable */
+        .source { r: 3; fill: #444; }
+        .detector { r: 3; fill: #888; }
+        .channel-line { stroke: #555; stroke-width: 1.5px; opacity: 0.4; pointer-events: none; }
+        .colorbar { margin-top: 20px; }
+        .colorbar-label { display: flex; justify-content: space-between; margin-top: 5px; font-size: 12px; color: #666; }
+        .heat-rect { shape-rendering: crispEdges; pointer-events: none;} /* Heatmap not clickable */
+        /* --- New styles --- */
+        .channel-click-target { /* Invisible target, make slightly visible for debugging */
+             fill: rgba(100, 100, 100, 0.0); /* Transparent fill */
+             stroke: none;
+             r: 7; /* Clickable radius */
+             cursor: pointer;
+        }
+        .channel-click-target:hover {
+             fill: rgba(100, 100, 100, 0.2); /* Slight highlight on hover */
+        }
+        .channel-click-target.selected {
+             stroke: #007bff; /* Blue stroke when selected */
+             stroke-width: 1.5px;
+             fill: none; /* Make selected outline visible */
+        }
+        .timeseries-container { margin-top: 30px; padding-top: 10px; border-top: 1px solid #eee; }
+        .timeseries-label { text-align: center; font-size: 0.9em; color: #555; margin-bottom: 5px; height: 1.2em; }
+        .timeseries-plot .axis path, .timeseries-plot .axis line { fill: none; stroke: #888; shape-rendering: crispEdges; }
+        .timeseries-plot .axis text { font-size: 10px; fill: #555; }
+        .timeseries-plot .signal-line { fill: none; stroke: steelblue; stroke-width: 1.5px; }
+        .timeseries-plot .current-time-marker { stroke: red; stroke-width: 1px; stroke-dasharray: 3,3; }
+		
+		.fiducial-marker { /* Style defined in JS stroke/stroke-width */ }
+        .fiducial-label {
+             font-family: sans-serif;
+             text-anchor: start; /* Align text starting from its x,y */
+        }
+        /* --- End new styles --- */
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Dynamic Titles -->
+        <h1 id="main-title">fNIRS Topography</h1>
+        <h2 id="subtitle"></h2>
+
+        <div class="controls">
+             <!-- Controls remain the same -->
+             <div class="control-row">
+                 <label for="subject-select">Subject:</label>
+                 <select id="subject-select"></select>
+             </div>
+             <div class="control-row">
+                <label for="time-slider">Time (s):</label>
+                <input type="range" id="time-slider" class="slider" min="0" max="100" value="0">
+                <span id="time-display" class="value-display">0</span>
+            </div>
+            <div class="control-row">
+                <label for="smoothing-slider">Smoothing:</label>
+                <input type="range" id="smoothing-slider" class="slider" min="0.1" max="1.5" step="0.05" value="0.85">
+                <span id="smoothing-display" class="value-display">0.85</span>
+            </div>
+        </div>
+
+        <div class="topomap-container">
+            <svg id="topomap" width="600" height="500"></svg>
+        </div>
+
+        <div class="colorbar">
+            <svg id="colorbar" width="600" height="30"></svg>
+            <div class="colorbar-label">
+                <span id="min-val">Min</span>
+                <span id="max-val">Max</span>
+            </div>
+        </div>
+
+        <!-- NEW: Timeseries Plot Area -->
+        <div class="timeseries-container">
+            <div id="timeseries-label" class="timeseries-label">Click a channel midpoint to view its signal</div>
+            <svg id="timeseries-plot" class="timeseries-plot" width="600" height="150"></svg>
+        </div>
+        <!-- END NEW -->
+
+    </div>
+
+    <script>
+        // Data injected by Python
+        var EEG_DATA = {};
+
+        // --- Global vars ---
+        let currentSubjectId = null;
+        let currentSubjectData = null;
+        let currentSubjectMin = -1;
+        let currentSubjectMax = 1;
+        let nTimes = 0;
+        let nSelectedChannels = 0;
+
+        // Topomap D3 selections & geometry constants/vars
+        let svg, g, heatmapGroup, channelLinesGroup, optodeDotsGroup, channelClickTargetsGroup; // Added channelClickTargetsGroup
+        let timeSlider, timeDisplay, smoothingSlider, smoothingDisplay, subjectSelect;
+        let colorScale;
+        let gridPoints3D = [];
+        const GRID_SIZE = 80;
+        const MIN_WEIGHT_SUM_THRESHOLD = 1e-3;
+        let centerX, centerY, headRadiusPixels;
+        let xMinGrid, xMaxGrid, yMinGrid, yMaxGrid, gridStepX, gridStepY;
+        let channelMidpointSvgPos = []; // Store {x, y, channelIndex, channelName}
+
+        // NEW: Timeseries plot vars
+        let timeseriesSvg, tsXScale, tsYScale, tsXAxisGroup, tsYAxisGroup, tsLinePath, tsCurrentTimeMarker, timeseriesLabel;
+        let selectedChannelIndex = null;
+        let selectedChannelName = null;
+        const tsMargin = { top: 10, right: 20, bottom: 30, left: 50 }; // Margins for timeseries plot
+        let tsWidth, tsHeight; // Calculated in init
+
+        // --- 3D Interpolation Function (unchanged) ---
+        function interpolateValue3D(targetPoint3D, values, channelPoints3D, smoothingFactor) {
+            if (isNaN(targetPoint3D[0])) return NaN;
+            let weightedSum = 0; let weightSum = 0; const epsilon = 1e-9;
+            for (let i = 0; i < channelPoints3D.length; i++) {
+                const p3d = channelPoints3D[i];
+                const val = values[i];
+                if (isNaN(val) || !isFinite(val)) continue;
+                const dx = targetPoint3D[0] - p3d[0]; const dy = targetPoint3D[1] - p3d[1]; const dz = targetPoint3D[2] - p3d[2];
+                const distSq = dx*dx + dy*dy + dz*dz;
+                if (distSq < epsilon) return val;
+                const distance = Math.sqrt(distSq);
+                const power = Math.max(0.1, 2 / smoothingFactor);
+                const weight = 1 / Math.pow(distance, power);
+                weightedSum += val * weight; weightSum += weight;
+            }
+            if (weightSum < MIN_WEIGHT_SUM_THRESHOLD) return NaN;
+            return weightSum > epsilon ? weightedSum / weightSum : 0;
+        }
+
+        // --- NEW: Update Current Time Marker on Timeseries Plot ---
+        function updateCurrentTimeMarker() {
+            if (!currentSubjectData || selectedChannelIndex === null || !currentSubjectData.times || !tsCurrentTimeMarker || !tsXScale) return;
+
+            const timeIdx = parseInt(timeSlider.value);
+            if (timeIdx >= 0 && timeIdx < currentSubjectData.times.length) {
+                const currentTime = currentSubjectData.times[timeIdx];
+                const xPos = tsXScale(currentTime);
+                tsCurrentTimeMarker
+                    .attr('x1', xPos)
+                    .attr('x2', xPos)
+                    .attr('y1', 0) // Top of plot area
+                    .attr('y2', tsHeight) // Bottom of plot area
+                    .style('visibility', 'visible');
+            } else {
+                 tsCurrentTimeMarker.style('visibility', 'hidden');
+            }
+        }
+
+        // --- NEW: Update Timeseries Plot ---
+        function updateTimeseriesPlot() {
+            if (!timeseriesSvg || !currentSubjectData || selectedChannelIndex === null) {
+                // Clear plot if no channel selected or no subject data
+                if(tsLinePath) tsLinePath.attr('d', null); // Remove line
+                if(tsCurrentTimeMarker) tsCurrentTimeMarker.style('visibility', 'hidden');
+                if(tsXAxisGroup) tsXAxisGroup.selectAll('*').remove(); // Clear axes
+                if(tsYAxisGroup) tsYAxisGroup.selectAll('*').remove();
+                if(timeseriesLabel) timeseriesLabel.textContent = 'Click a channel midpoint to view its signal';
+                return;
+            }
+
+            const times = currentSubjectData.times;
+            let signal = [];
+             try { // Add error handling for data access
+                signal = currentSubjectData.data.map(timeSlice => timeSlice[selectedChannelIndex]);
+             } catch (e) {
+                 console.error(`Error extracting signal for channel index ${selectedChannelIndex}`, e);
+                 // Clear plot on error
+                 if(tsLinePath) tsLinePath.attr('d', null);
+                 if(tsCurrentTimeMarker) tsCurrentTimeMarker.style('visibility', 'hidden');
+                 if(timeseriesLabel) timeseriesLabel.textContent = `Error loading data for ${selectedChannelName}`;
+                 return;
+             }
+
+
+            if (!times || times.length === 0 || !signal || signal.length !== times.length) {
+                 console.warn(`Inconsistent times/signal data for channel ${selectedChannelName}`);
+                 if(tsLinePath) tsLinePath.attr('d', null); // Clear line if data invalid
+                 return;
+            }
+
+            // Determine Y scale domain (channel specific or subject overall)
+            // let yMin = d3.min(signal);
+            // let yMax = d3.max(signal);
+            // Or use subject's overall scale for consistency? Let's try overall first.
+             let yMin = currentSubjectMin;
+             let yMax = currentSubjectMax;
+
+             // Handle zero range
+             if (yMin === yMax) {
+                const epsilon = Math.abs(yMin * 0.1) || 0.1;
+                yMin -= epsilon;
+                yMax += epsilon;
+             }
+
+            // Update scales
+            tsXScale.domain(d3.extent(times)); // [minTime, maxTime]
+            tsYScale.domain([yMin, yMax]).nice(); // Use subject min/max
+
+            // Update axes
+            tsXAxisGroup.call(d3.axisBottom(tsXScale).ticks(5)); // Adjust tick count as needed
+            tsYAxisGroup.call(d3.axisLeft(tsYScale).ticks(5).tickFormat(d3.format(".1e"))); // Scientific notation
+
+            // Define line generator
+            const line = d3.line()
+                .x(d => tsXScale(d.time))
+                .y(d => tsYScale(d.value))
+                 //.defined(d => !isNaN(d.value)); // Handle potential NaNs in signal data if needed
+
+            // Prepare data for line generator
+            const plotData = times.map((t, i) => ({ time: t, value: signal[i] }));
+
+            // Update line path
+            tsLinePath
+                .datum(plotData)
+                .transition().duration(100) // Smooth transition
+                .attr("d", line);
+
+            // Update label
+            timeseriesLabel.textContent = `Signal: ${selectedChannelName}`;
+
+            // Update time marker position
+            updateCurrentTimeMarker();
+        }
+
+        // --- NEW: Handle Channel Click ---
+        function handleChannelClick(event, d) {
+            // 'd' is the data bound to the clicked circle: {x, y, channelIndex, channelName}
+            selectedChannelIndex = d.channelIndex;
+            selectedChannelName = d.channelName;
+            console.log(`Channel clicked: ${selectedChannelName} (Index: ${selectedChannelIndex})`);
+
+            // Update visual selection state for circles
+            channelClickTargetsGroup.selectAll('.channel-click-target')
+                .classed('selected', datum => datum.channelIndex === selectedChannelIndex);
+
+            // Update the timeseries plot
+            updateTimeseriesPlot();
+        }
+
+
+        // --- Update Topography Function (calls updateCurrentTimeMarker) ---
+        function updateTopography() {
+            if (centerX === undefined || !currentSubjectData) { return; }
+            if (nTimes === 0) { /* ... (handling for no time points - unchanged) ... */ return; }
+
+            const timeIdx = parseInt(timeSlider.value);
+            const smoothingFactor = parseFloat(smoothingSlider.value);
+
+            if (timeIdx < 0 || timeIdx >= currentSubjectData.data.length) { /* ... error handling ... */ return; }
+            const timeData = currentSubjectData.data[timeIdx];
+
+            if (!timeData || timeData.length !== nSelectedChannels) { /* ... error handling ... */ return; }
+
+            // --- Update color scale, displays, labels (unchanged) ---
+            colorScale.domain([currentSubjectMin, currentSubjectMax]);
+            if (currentSubjectData.times && timeIdx < currentSubjectData.times.length) {
+                 timeDisplay.textContent = Math.round(currentSubjectData.times[timeIdx]);
+            } else { timeDisplay.textContent = timeIdx; }
+            smoothingDisplay.textContent = smoothingFactor.toFixed(2);
+            document.getElementById('min-val').textContent = currentSubjectMin.toExponential(1);
+            document.getElementById('max-val').textContent = currentSubjectMax.toExponential(1);
+
+            // --- Draw Heatmap (unchanged logic, uses gray for NaN) ---
+            heatmapGroup.selectAll('.heat-rect').remove();
+            const pixels = [];
+            const channelPoints3D = EEG_DATA.channels.positions3d;
+            for (let i = 0; i <= GRID_SIZE; i++) {
+                 const svg_x = xMinGrid + i * gridStepX;
+                for (let j = 0; j <= GRID_SIZE; j++) {
+                    const svg_y = yMinGrid + j * gridStepY;
+                    const targetPoint3D = gridPoints3D[i][j];
+                    const value = interpolateValue3D(targetPoint3D, timeData, channelPoints3D, smoothingFactor);
+                    pixels.push({ x: svg_x, y: svg_y, value: value });
+                }
+            }
+            heatmapGroup.selectAll('.heat-rect')
+                .data(pixels).enter().append('rect').attr('class', 'heat-rect')
+                .attr('x', d => d.x - gridStepX / 2).attr('y', d => d.y - gridStepY / 2)
+                .attr('width', gridStepX).attr('height', gridStepY)
+                .style('fill', d => {
+                    if (isNaN(d.value)) { return '#dddddd'; } // Gray for NaN
+                    else {
+                        const clampedValue = Math.max(currentSubjectMin, Math.min(currentSubjectMax, d.value));
+                        return colorScale(clampedValue);
+                    }
+                });
+
+            // Bring lines, dots, and click targets to front
+            if (channelLinesGroup) channelLinesGroup.raise();
+            if (optodeDotsGroup) optodeDotsGroup.raise();
+            if (channelClickTargetsGroup) channelClickTargetsGroup.raise(); // Ensure targets are on top
+
+            // --- Update the time marker on the timeseries plot ---
+            updateCurrentTimeMarker(); // Call this at the end
+        }
+
+        // --- Switch Subject Function (calls updateTimeseriesPlot) ---
+        function switchSubject(subjectId) {
+            if (!EEG_DATA.subjects[subjectId]) { /* ... error handling ... */ return; }
+            console.log("Switching to subject:", subjectId);
+            currentSubjectId = subjectId;
+            currentSubjectData = EEG_DATA.subjects[subjectId];
+
+            if (!currentSubjectData || !currentSubjectData.times || !currentSubjectData.data) { /* ... error handling ... */ nTimes = 0; currentSubjectMin = -1; currentSubjectMax = 1; }
+            else {
+                nTimes = currentSubjectData.times.length;
+                // Calculate overall Min/Max (unchanged logic)
+                let overallMin = Infinity; let overallMax = -Infinity;
+                currentSubjectData.data.forEach(timeSlice => {
+                     if (Array.isArray(timeSlice)) {
+                        timeSlice.forEach(value => { /* ... find min/max ... */ if (!isNaN(value) && isFinite(value)) { if (value < overallMin) overallMin = value; if (value > overallMax) overallMax = value; } });
+                     }
+                });
+                // Handle edge cases (unchanged logic)
+                 if (overallMin === Infinity) { currentSubjectMin = -1; currentSubjectMax = 1; }
+                 else if (overallMin === overallMax) { const e = Math.abs(overallMin * 0.1) || 0.1; currentSubjectMin = overallMin - e; currentSubjectMax = overallMax + e;}
+                 else { currentSubjectMin = overallMin; currentSubjectMax = overallMax; }
+            }
+            console.log(`Subject ${subjectId} overall range: [${currentSubjectMin}, ${currentSubjectMax}]`);
+
+            // Update time slider
+            timeSlider.max = nTimes > 0 ? nTimes - 1 : 0;
+            timeSlider.value = 0; // Reset slider to start
+
+             // --- Update the timeseries plot for the new subject (keeping channel selection) ---
+             updateTimeseriesPlot();
+
+            // Update topography (will also update time marker via updateTopography)
+            updateTopography();
+        }
+
+        // --- Setup Subject Selection Dropdown (unchanged) ---
+        function setupSubjectSelection() {
+            subjectSelect = document.getElementById('subject-select');
+            if (!subjectSelect) return;
+            EEG_DATA.subjectList.forEach(subId => { /* ... populate dropdown ... */ const option = document.createElement('option'); option.value = subId; option.textContent = subId; subjectSelect.appendChild(option); });
+            subjectSelect.addEventListener('change', function() { switchSubject(this.value); });
+            if (EEG_DATA.subjectList.length > 0) { switchSubject(EEG_DATA.subjectList[0]); }
+            else { d3.select('.container').append('p').style('color', 'red').text('No subject data found for this trial.'); }
+        }
+
+
+        // --- Initialize Visualization (Setup SVG, static elements, precompute grid, setup timeseries plot) ---
+        function initVisualization() {
+            // --- Basic Setup (SVG, Margins, global geometry) ---
+            const width = 600, height = 500; const tsPlotHeight = 150; // Define timeseries plot height
+            const margin = { top: 50, right: 50, bottom: 50, left: 50 };
+            const innerWidth = width - margin.left - margin.right;
+            const innerHeight = height - margin.top - margin.bottom;
+            headRadiusPixels = Math.min(innerWidth, innerHeight) / 2 * 0.95;
+            centerX = innerWidth / 2; centerY = innerHeight / 2;
+
+            // --- Cache DOM elements ---
+             timeSlider = document.getElementById('time-slider'); timeDisplay = document.getElementById('time-display');
+             smoothingSlider = document.getElementById('smoothing-slider'); smoothingDisplay = document.getElementById('smoothing-display');
+             smoothingDisplay.textContent = parseFloat(smoothingSlider.value).toFixed(2);
+             timeseriesLabel = document.getElementById('timeseries-label'); // Cache label div
+
+            // --- Setup Topomap SVG structure ---
+            svg = d3.select('#topomap').attr('viewBox', `0 0 ${width} ${height}`).attr('preserveAspectRatio', 'xMidYMid meet').attr('width', '100%').attr('height', 'auto'); // Adjust height if needed
+            g = svg.append('g').attr('transform', `translate(${margin.left}, ${margin.top})`);
+            const clipId = "head-clip";
+            svg.append("defs").append("clipPath").attr("id", clipId).append("circle").attr("cx", centerX).attr("cy", centerY).attr("r", headRadiusPixels);
+            heatmapGroup = g.append("g").attr("clip-path", `url(#${clipId})`);
+
+            // --- Draw Topomap Static Elements (Head, Ears, Nose - unchanged) ---
+            g.append('circle').attr('class', 'head-outline').attr('cx', centerX).attr('cy', centerY).attr('r', headRadiusPixels);
+            /* ... ear/nose drawing ... */
+            const earWidth = headRadiusPixels * 0.15, earHeight = headRadiusPixels * 0.3;
+            // g.append('ellipse').attr('class', 'ear').attr('cx', centerX - headRadiusPixels).attr('cy', centerY).attr('rx', earWidth).attr('ry', earHeight);
+            // g.append('ellipse').attr('class', 'ear').attr('cx', centerX + headRadiusPixels).attr('cy', centerY).attr('rx', earWidth).attr('ry', earHeight);
+            const nose_norm_x = EEG_DATA.head.nose.x; const nose_norm_y = EEG_DATA.head.nose.y; const noseAngle = Math.atan2(nose_norm_y, nose_norm_x);
+            const noseSize = headRadiusPixels * 0.1, noseWidth = noseSize * 0.5; const noseBaseSvgX = centerX + headRadiusPixels * Math.cos(noseAngle);
+            const noseBaseSvgY = centerY - headRadiusPixels * Math.sin(noseAngle); const noseTipSvgX = noseBaseSvgX + noseSize * Math.cos(noseAngle);
+            const noseTipSvgY = noseBaseSvgY - noseSize * Math.sin(noseAngle); const perpAngle = noseAngle + Math.PI / 2;
+            g.append('path').attr('class', 'nose-outline').attr('d', `M ${noseBaseSvgX + noseWidth * Math.cos(perpAngle)} ${noseBaseSvgY - noseWidth * Math.sin(perpAngle)} L ${noseTipSvgX} ${noseTipSvgY} L ${noseBaseSvgX - noseWidth * Math.cos(perpAngle)} ${noseBaseSvgY + noseWidth * Math.sin(perpAngle)} Z`);
+
+
+            // --- Draw Optodes and Lines (unchanged) ---
+            const optodeSvgPos = {};
+            Object.entries(EEG_DATA.optodes.sources || {}).forEach(([n, p]) => { optodeSvgPos[n] = { x: centerX + p.x * headRadiusPixels, y: centerY - p.y * headRadiusPixels }; });
+            Object.entries(EEG_DATA.optodes.detectors || {}).forEach(([n, p]) => { optodeSvgPos[n] = { x: centerX + p.x * headRadiusPixels, y: centerY - p.y * headRadiusPixels }; });
+            channelLinesGroup = g.append("g").attr("class", "channel-lines-group");
+            (EEG_DATA.optodes.pairs || []).forEach(pair => { /* ... draw lines ... */ const s=pair[0],d=pair[1]; if(optodeSvgPos[s]&&optodeSvgPos[d]){channelLinesGroup.append("line").attr("class","channel-line").attr("x1",optodeSvgPos[s].x).attr("y1",optodeSvgPos[s].y).attr("x2",optodeSvgPos[d].x).attr("y2",optodeSvgPos[d].y);} });
+            optodeDotsGroup = g.append("g").attr("class", "optode-dots-group");
+            Object.entries(optodeSvgPos).forEach(([name, pos]) => { /* ... draw dots ... */ const isSrc=name.startsWith('S'); optodeDotsGroup.append("circle").attr("class",`optode ${isSrc?'source':'detector'}`).attr("cx",pos.x).attr("cy",pos.y); });
+
+            // --- Calculate SVG Midpoints & Draw Click Targets ---
+            channelMidpointSvgPos = []; // Reset
+            channelClickTargetsGroup = g.append("g").attr("class", "channel-click-targets");
+            const channelPoints3D = EEG_DATA.channels.positions3d;
+            const headCenter3d = EEG_DATA.geometry.headCenter3d;
+            const scaleFactor = EEG_DATA.geometry.projectionScaleFactor;
+
+            channelPoints3D.forEach((p3d, index) => {
+                // Project 3D midpoint to 2D normalized coords
+                const proj_x_y = project_point_azimuthal_equidistant_js(p3d, headCenter3d); // Use JS version
+                const norm_x = proj_x_y[0] / scaleFactor;
+                const norm_y = proj_x_y[1] / scaleFactor;
+                 // Convert normalized 2D to SVG pixel coords
+                const svgX = centerX + norm_x * headRadiusPixels;
+                const svgY = centerY - norm_y * headRadiusPixels; // Invert Y
+                const channelName = EEG_DATA.channels.names[index];
+
+                channelMidpointSvgPos.push({ x: svgX, y: svgY, channelIndex: index, channelName: channelName });
+
+                // Add clickable circle
+                channelClickTargetsGroup.append("circle")
+                    .datum({ x: svgX, y: svgY, channelIndex: index, channelName: channelName }) // Bind data
+                    .attr("class", "channel-click-target")
+                    .attr("cx", svgX)
+                    .attr("cy", svgY)
+                    .on("click", handleChannelClick); // Attach click handler
+            });
+			
+			
+			// --- NEW: Draw Fiducial Markers and Labels ---
+            if (EEG_DATA.fiducials && Object.keys(EEG_DATA.fiducials).length > 0) {
+                console.log("Drawing fiducials:", EEG_DATA.fiducials);
+                const fiducialsGroup = g.append("g").attr("class", "fiducials-group");
+
+                Object.entries(EEG_DATA.fiducials).forEach(([name, normPos]) => {
+                    // Convert normalized 2D to SVG pixel coords
+                    const svgX = centerX + normPos.x * headRadiusPixels;
+                    const svgY = centerY - normPos.y * headRadiusPixels; // Invert Y
+
+                    // Draw a marker (e.g., a cross)
+                    const markerSize = 4; // Adjust size as needed
+                    fiducialsGroup.append("path")
+                        .attr("class", "fiducial-marker")
+                        .attr("d", `M ${svgX - markerSize} ${svgY} L ${svgX + markerSize} ${svgY} M ${svgX} ${svgY - markerSize} L ${svgX} ${svgY + markerSize}`) // Simple cross
+                        .style("stroke", "purple") // Choose a distinct color
+                        .style("stroke-width", 1.5)
+                        .style("pointer-events", "none");
+
+                    // Draw the label
+                    fiducialsGroup.append("text")
+                        .attr("class", "fiducial-label")
+                        .attr("x", svgX + markerSize + 2) // Offset from marker
+                        .attr("y", svgY + markerSize / 2) // Adjust vertical alignment
+                        .style("font-size", "9px")
+                        .style("fill", "purple")
+                        .style("pointer-events", "none")
+                        .text(name);
+                });
+                // Optional: ensure fiducials are drawn on top of heatmap but maybe behind channel targets
+                // fiducialsGroup.raise(); // Raise if needed
+            }
+
+            // --- Interpolation Setup ---
+            nSelectedChannels = EEG_DATA.channels.names.length;
+
+            // --- Pre-calculate 3D coordinates for the 2D heatmap grid (unchanged) ---
+            xMinGrid = centerX - headRadiusPixels; xMaxGrid = centerX + headRadiusPixels; yMinGrid = centerY - headRadiusPixels; yMaxGrid = centerY + headRadiusPixels;
+            gridStepX = (xMaxGrid - xMinGrid) / GRID_SIZE; gridStepY = (yMaxGrid - yMinGrid) / GRID_SIZE;
+            gridPoints3D = []; console.time("Precompute 3D Grid");
+            const headRadius3d = EEG_DATA.geometry.headRadius3d; // Need R here too
+            for (let i = 0; i <= GRID_SIZE; i++) { /* ... loop ... */ const gridRow3D = []; const svg_x = xMinGrid + i * gridStepX; for (let j = 0; j <= GRID_SIZE; j++) { /* ... loop ... */ const svg_y = yMinGrid + j * gridStepY; const norm_x = (svg_x - centerX) / headRadiusPixels; const norm_y = -(svg_y - centerY) / headRadiusPixels; const proj_x = norm_x * scaleFactor; const proj_y = norm_y * scaleFactor; const theta = Math.sqrt(proj_x*proj_x + proj_y*proj_y); const phi = Math.atan2(proj_y, proj_x); let point3d = [NaN, NaN, NaN]; if (theta <= Math.PI) { const dx = headRadius3d * Math.sin(theta) * Math.cos(phi); const dy = headRadius3d * Math.sin(theta) * Math.sin(phi); const dz = headRadius3d * Math.cos(theta); point3d = [ headCenter3d[0] + dx, headCenter3d[1] + dy, headCenter3d[2] + dz ]; } gridRow3D.push(point3d); } gridPoints3D.push(gridRow3D); }
+            console.timeEnd("Precompute 3D Grid"); console.log(`Precalculated 3D grid points (${GRID_SIZE+1}x${GRID_SIZE+1}).`);
+
+            // --- Color Scale & Colorbar (unchanged) ---
+            colorScale = d3.scaleSequential(d3.interpolateTurbo); // d3.scaleSequential(d3.interpolateRdBu);
+            /* ... colorbar setup ... */
+            const colorbarWidth = innerWidth * 0.8, colorbarHeight = 20; const cbMargin = { left: innerWidth * 0.1, right: innerWidth * 0.1 }; const cbSvg = d3.select('#colorbar').attr('viewBox', `0 0 ${innerWidth} ${colorbarHeight + 10}`).attr('width', '100%').attr('height', colorbarHeight + 10); const cbDefs = cbSvg.append('defs'); const cbGrad = cbDefs.append('linearGradient').attr('id', 'colorbar-gradient').attr('x1', '0%').attr('y1', '0%').attr('x2', '100%').attr('y2', '0%'); const numStops = 100; for (let i = 0; i < numStops; i++) { const offset = i / (numStops - 1); cbGrad.append('stop').attr('offset', `${offset*100}%`).attr('stop-color', d3.interpolateTurbo(offset));} cbSvg.append('rect').attr('x', cbMargin.left).attr('y', 0).attr('width', colorbarWidth).attr('height', colorbarHeight).style('fill', 'url(#colorbar-gradient)'); d3.select('#min-val').style('margin-left', `${cbMargin.left}px`); d3.select('#max-val').style('margin-right', `${cbMargin.right}px`);
+
+            // --- NEW: Setup Timeseries Plot SVG ---
+            tsWidth = width - tsMargin.left - tsMargin.right; // Use topo width for alignment
+            tsHeight = tsPlotHeight - tsMargin.top - tsMargin.bottom;
+            timeseriesSvg = d3.select("#timeseries-plot")
+                              .attr('viewBox', `0 0 ${width} ${tsPlotHeight}`) // Use width for consistency
+                              .attr('preserveAspectRatio', 'xMidYMid meet')
+                              .attr('width', '100%').attr('height', 'auto') // Responsive height
+                              .append("g")
+                              .attr("transform", `translate(${tsMargin.left},${tsMargin.top})`);
+
+            // Define scales (domains will be set in updateTimeseriesPlot)
+            tsXScale = d3.scaleLinear().range([0, tsWidth]);
+            tsYScale = d3.scaleLinear().range([tsHeight, 0]); // Y is inverted
+
+            // Create axes groups
+            tsXAxisGroup = timeseriesSvg.append("g")
+                .attr("class", "axis x-axis")
+                .attr("transform", `translate(0,${tsHeight})`);
+            tsYAxisGroup = timeseriesSvg.append("g")
+                .attr("class", "axis y-axis");
+
+             // Add X axis label
+            timeseriesSvg.append("text")
+                .attr("text-anchor", "middle")
+                .attr("x", tsWidth / 2)
+                .attr("y", tsHeight + tsMargin.bottom - 5) // Position below axis
+                .style("font-size", "10px")
+                .text("Time (s)");
+
+             // Add Y axis label placeholder (might be better next to axis)
+             // timeseriesSvg.append("text") ...
+
+            // Create line path placeholder
+            tsLinePath = timeseriesSvg.append("path")
+                .attr("class", "signal-line");
+
+            // Create current time marker placeholder
+            tsCurrentTimeMarker = timeseriesSvg.append("line")
+                .attr("class", "current-time-marker")
+                .style('visibility', 'hidden'); // Initially hidden
+
+            // --- Add Event Listeners ---
+            timeSlider.addEventListener('input', updateTopography);
+            smoothingSlider.addEventListener('input', updateTopography);
+
+        } // End initVisualization
+
+        // --- Helper: JS version of Azimuthal Equidistant Projection ---
+        // Needed to calculate channel midpoint SVG positions directly if not passed
+         function project_point_azimuthal_equidistant_js(point3d_arr, center3d_arr) {
+             const vec_x = point3d_arr[0] - center3d_arr[0];
+             const vec_y = point3d_arr[1] - center3d_arr[1];
+             const vec_z = point3d_arr[2] - center3d_arr[2];
+             const dist = Math.sqrt(vec_x*vec_x + vec_y*vec_y + vec_z*vec_z);
+             if (dist < 1e-9) return [0.0, 0.0];
+             let acos_arg = vec_z / dist;
+             acos_arg = Math.max(-1.0, Math.min(1.0, acos_arg)); // Clamp
+             const theta = Math.acos(acos_arg);
+             const phi = Math.atan2(vec_y, vec_x);
+             const rho = theta;
+             const proj_x = rho * Math.cos(phi);
+             const proj_y = rho * Math.sin(phi);
+             return [proj_x, proj_y];
+         }
+
+
+        // --- Run on Page Load ---
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check for essential data parts
+             if (Object.keys(EEG_DATA).length > 0 && EEG_DATA.subjects && EEG_DATA.subjectList && EEG_DATA.geometry && EEG_DATA.channels && EEG_DATA.channels.positions3d && EEG_DATA.channels.names) {
+                document.title = `fNIRS Topography: Trial ${EEG_DATA.trialNum} ${EEG_DATA.chromophore}`;
+                document.getElementById('main-title').textContent = `fNIRS Topography: Trial ${EEG_DATA.trialNum}`;
+                document.getElementById('subtitle').textContent = `${EEG_DATA.chromophore} (${EEG_DATA.channelType})`;
+
+                initVisualization(); // Setup SVG, precompute grid, init timeseries plot etc.
+                setupSubjectSelection(); // Setup dropdown and trigger initial subject load + redraw
+            } else {
+                console.error("fNIRS data structure invalid or missing essential fields.", EEG_DATA);
+                d3.select('.container').html('<h1>Error</h1><p>fNIRS data not loaded or invalid.</p>');
+            }
+        });
+
+    </script>
+</body>
+</html>
