@@ -154,7 +154,7 @@ In summary, the tool generalizes well to different fNIRS montages provided accur
 
 If you use this visualization tool in your research or publications, please cite it as follows:
 
-CeMSIM (2025). Interactive fNIRS Topography Viewer (Version [v1.1.1]). GitHub Repository. [Your GitHub Repository URL]
+CeMSIM (2025). Interactive fNIRS Topography Viewer (Version [v1.1.1]). GitHub Repository. [Link](https://github.com/axiom5/fNIRS_topoviewer/)
 
 ## License
 
